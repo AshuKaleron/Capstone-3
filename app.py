@@ -1,14 +1,11 @@
 # ============================================================================
-# BLOCK 25: [Advanced Production Streamlit Dashboard — NeuroSense v2]
+# BLOCK 25 — NeuroSense v3: Production Streamlit Dashboard
 # ============================================================================
-# A futuristic, production-grade Streamlit application featuring:
-#   • Dark-mode neon-glow glassmorphism UI with animated cosmic background
-#   • 6 interactive tabs with rich features in each
-#   • Plotly radar, gauge, sunburst, heatmap, and animated bar charts
-#   • Real-time SHAP waterfall explanations
-#   • What-If Simulator for feature sensitivity analysis
-#   • Batch CSV processing with downloadable results
-#   • Full model performance dashboard with interactive comparison
+# Futuristic dark-mode analytics platform with 6 tabs.
+# All critical deployment precautions are preserved:
+#   1. ChampionModelWrapper defined BEFORE pickle.load()
+#   2. TensorFlow imported lazily (only if champion is Keras)
+#   3. Unified .predict_proba() contract — no type-sniffing
 # ============================================================================
 
 import streamlit as st
@@ -17,14 +14,9 @@ import pandas as pd
 import pickle
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
 
-# ── Lazy optional imports (TF is heavy — only load if actually needed) ──
-# TensorFlow is NOT imported at module level. It will be imported inside
-# load_artifacts() ONLY if the champion model is a Keras model.
-# This prevents Streamlit Cloud from loading ~800MB of TF into RAM when
-# the champion is a lightweight tree model like CatBoost or LightGBM.
-TF_AVAILABLE = False  # Set to True lazily inside load_artifacts() if needed
+# ── Lazy TF — NOT imported at module level ──
+TF_AVAILABLE = False
 
 try:
     import shap
@@ -34,46 +26,34 @@ except ImportError:
 
 
 # ============================================================================
-# CHAMPION MODEL WRAPPER (Required for pickle deserialization)
-# ============================================================================
-# This class MUST be defined in app.py BEFORE pickle.load() is called.
-# The pipeline (Block 24) pickles a ChampionModelWrapper object into
-# champion_model.pkl. When Python unpickles it, it looks for the class
-# in the current module's namespace. If this class is missing, Python
-# throws: AttributeError: Can't get attribute 'ChampionModelWrapper'
+# CHAMPION MODEL WRAPPER  (pickle needs this class in the module namespace)
 # ============================================================================
 
 class ChampionModelWrapper:
-    """
-    Unified inference wrapper that standardizes the .predict_proba() contract
-    regardless of whether the champion is a single tree model, a soft-vote
-    ensemble, or a Keras neural network.
-    """
+    """Unified wrapper: always exposes .predict_proba() and .predict()."""
 
     def __init__(self, model_or_models, deploy_type, model_names=None):
         self.deploy_type = deploy_type
-        self.model_names = model_names  # only for Ensemble
-        if deploy_type == 'Ensemble':
-            self._models = model_or_models  # list of sklearn estimators
+        self.model_names = model_names
+        if deploy_type == "Ensemble":
+            self._models = model_or_models
         else:
-            self._model = model_or_models   # single estimator
+            self._model = model_or_models
 
     def predict_proba(self, X):
-        """Return class probability array of shape (n_samples, n_classes)."""
-        if self.deploy_type == 'Ensemble':
+        if self.deploy_type == "Ensemble":
             return np.mean([m.predict_proba(X) for m in self._models], axis=0)
-        elif self.deploy_type == 'Keras':
+        elif self.deploy_type == "Keras":
             return self._model.predict(X, verbose=0)
         else:
             return self._model.predict_proba(X)
 
     def predict(self, X):
-        """Return integer class predictions."""
         return np.argmax(self.predict_proba(X), axis=1)
 
 
 # ============================================================================
-# PAGE CONFIG & GLOBAL CSS
+# PAGE CONFIG
 # ============================================================================
 
 st.set_page_config(
@@ -83,483 +63,447 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Ultra-Premium Futuristic Dark CSS ──
+# ============================================================================
+# CSS — Futuristic Dark Neon Theme
+# ============================================================================
+
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-    /* ═══ GLOBAL BACKGROUND — Animated Cosmic Gradient ═══ */
-    .stApp {
-        background: linear-gradient(135deg, #05051a 0%, #0a0a2e 25%, #10103a 50%, #0d0d30 75%, #05051a 100%);
-        background-size: 400% 400%;
-        animation: cosmicShift 20s ease infinite;
-        color: #e0e6ed;
-        font-family: 'Inter', sans-serif;
-    }
-    @keyframes cosmicShift {
-        0%   { background-position: 0% 50%; }
-        25%  { background-position: 100% 0%; }
-        50%  { background-position: 100% 100%; }
-        75%  { background-position: 0% 100%; }
-        100% { background-position: 0% 50%; }
-    }
+/* ── Root Variables ── */
+:root {
+    --accent-1: #7c3aed;
+    --accent-2: #06d6a0;
+    --accent-3: #3b82f6;
+    --bg-dark: #05051a;
+    --bg-card: rgba(255,255,255,0.03);
+    --border: rgba(255,255,255,0.06);
+    --text-primary: #e0e6ed;
+    --text-secondary: #6b7280;
+    --text-muted: #4b5563;
+}
 
-    /* ═══ HIDE STREAMLIT DEFAULTS ═══ */
-    #MainMenu, footer, header { visibility: hidden; }
+/* ── Animated Background ── */
+.stApp {
+    background: linear-gradient(135deg, var(--bg-dark) 0%, #0a0a2e 30%, #10103a 60%, #0d0d30 80%, var(--bg-dark) 100%);
+    background-size: 400% 400%;
+    animation: drift 25s ease infinite;
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+}
+@keyframes drift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
 
-    /* ═══ SCROLLBAR ═══ */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(180deg, #7c3aed, #06d6a0);
-        border-radius: 10px;
-    }
+/* ── Hide defaults ── */
+#MainMenu, footer, header { visibility: hidden; }
 
-    /* ═══ HERO HEADER ═══ */
-    .hero-container {
-        text-align: center;
-        padding: 2rem 1rem 1rem;
-        position: relative;
-    }
-    .hero-title {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 3.8rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #7c3aed 0%, #06d6a0 40%, #3b82f6 70%, #7c3aed 100%);
-        background-size: 300% 300%;
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        animation: textGlow 5s ease infinite;
-        letter-spacing: -2px;
-        line-height: 1.1;
-        margin-bottom: 0.3rem;
-    }
-    @keyframes textGlow {
-        0%   { background-position: 0% 50%; filter: brightness(1); }
-        50%  { background-position: 100% 50%; filter: brightness(1.15); }
-        100% { background-position: 0% 50%; filter: brightness(1); }
-    }
-    .hero-badge {
-        display: inline-block;
-        background: rgba(124, 58, 237, 0.15);
-        border: 1px solid rgba(124, 58, 237, 0.3);
-        color: #a78bfa;
-        padding: 0.3rem 1rem;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        letter-spacing: 2px;
-        text-transform: uppercase;
-        margin-bottom: 0.5rem;
-    }
-    .hero-subtitle {
-        font-family: 'Inter', sans-serif;
-        font-size: 1rem;
-        color: #6b7280;
-        font-weight: 400;
-        letter-spacing: 0.3px;
-        max-width: 600px;
-        margin: 0 auto;
-    }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: linear-gradient(180deg, var(--accent-1), var(--accent-2)); border-radius: 10px; }
 
-    /* ═══ GLASS CARD — Base ═══ */
-    .glass {
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 16px;
-        padding: 1.5rem;
-        margin-bottom: 1rem;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        position: relative;
-        overflow: hidden;
-    }
-    .glass::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(124, 58, 237, 0.4), rgba(6, 214, 160, 0.3), transparent);
-    }
-    .glass:hover {
-        border-color: rgba(124, 58, 237, 0.2);
-        box-shadow: 0 8px 40px rgba(124, 58, 237, 0.08);
-        transform: translateY(-1px);
-    }
+/* ── Hero ── */
+.hero { text-align: center; padding: 2rem 1rem 0.5rem; }
+.hero-badge {
+    display: inline-block;
+    background: rgba(124,58,237,0.12);
+    border: 1px solid rgba(124,58,237,0.25);
+    color: #a78bfa;
+    padding: 0.25rem 1rem;
+    border-radius: 20px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+}
+.hero-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 3.6rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2), var(--accent-3), var(--accent-1));
+    background-size: 300% 300%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 6s ease infinite;
+    letter-spacing: -2px;
+    line-height: 1.1;
+}
+@keyframes shimmer {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+.hero-sub {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    max-width: 580px;
+    margin: 0.4rem auto 0;
+}
 
-    /* ═══ NEON GLOW CARD (for results) ═══ */
-    .neon-card {
-        background: rgba(255, 255, 255, 0.04);
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(124, 58, 237, 0.2);
-        border-radius: 20px;
-        padding: 2rem;
-        text-align: center;
-        position: relative;
-        overflow: hidden;
-        animation: cardReveal 0.7s ease-out;
-    }
-    .neon-card::before {
-        content: '';
-        position: absolute;
-        top: -1px; left: -1px; right: -1px; bottom: -1px;
-        background: linear-gradient(135deg, rgba(124, 58, 237, 0.3), transparent, rgba(6, 214, 160, 0.2));
-        border-radius: 20px;
-        z-index: -1;
-        opacity: 0.5;
-    }
-    @keyframes cardReveal {
-        from { opacity: 0; transform: translateY(30px) scale(0.95); }
-        to   { opacity: 1; transform: translateY(0) scale(1); }
-    }
+/* ── Divider ── */
+.ndiv {
+    height: 1px;
+    background: linear-gradient(90deg, transparent 5%, rgba(124,58,237,0.3) 35%, rgba(6,214,160,0.2) 65%, transparent 95%);
+    margin: 1.2rem 0;
+}
 
-    /* ═══ EMOTION RESULT ═══ */
-    .emo-icon { font-size: 5rem; animation: emoPulse 1s ease; }
-    @keyframes emoPulse {
-        0%   { transform: scale(0); opacity: 0; }
-        50%  { transform: scale(1.3); }
-        100% { transform: scale(1); opacity: 1; }
-    }
-    .emo-label {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 2.4rem;
-        font-weight: 700;
-        margin: 0.4rem 0 0.2rem;
-    }
-    .emo-conf {
-        font-size: 1rem;
-        color: #6b7280;
-        font-weight: 400;
-    }
+/* ── Glass Card ── */
+.gl {
+    background: var(--bg-card);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.4rem;
+    margin-bottom: 1rem;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.35s cubic-bezier(0.4,0,0.2,1);
+}
+.gl::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(124,58,237,0.35), rgba(6,214,160,0.25), transparent);
+}
+.gl:hover {
+    border-color: rgba(124,58,237,0.18);
+    box-shadow: 0 8px 35px rgba(124,58,237,0.07);
+    transform: translateY(-1px);
+}
 
-    /* ═══ METRIC CARDS ═══ */
-    .metric-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 0.8rem;
-        margin: 1rem 0;
-    }
-    .m-card {
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 14px;
-        padding: 1.2rem;
-        text-align: center;
-        transition: all 0.3s;
-        position: relative;
-        overflow: hidden;
-    }
-    .m-card::after {
-        content: '';
-        position: absolute;
-        bottom: 0; left: 0; right: 0;
-        height: 2px;
-        background: linear-gradient(90deg, #7c3aed, #06d6a0);
-        opacity: 0;
-        transition: opacity 0.3s;
-    }
-    .m-card:hover { transform: scale(1.02); }
-    .m-card:hover::after { opacity: 1; }
-    .m-val {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.8rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #7c3aed, #06d6a0);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .m-label {
-        font-size: 0.7rem;
-        color: #6b7280;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        margin-top: 0.3rem;
-    }
+/* ── Neon Result Card ── */
+.neon {
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(18px);
+    border: 1px solid rgba(124,58,237,0.2);
+    border-radius: 20px;
+    padding: 2rem;
+    text-align: center;
+    overflow: hidden;
+    animation: neonIn 0.6s ease-out;
+}
+@keyframes neonIn {
+    from { opacity: 0; transform: translateY(25px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.emo-icon { font-size: 5rem; animation: pop 0.8s ease; }
+@keyframes pop {
+    0%   { transform: scale(0); }
+    60%  { transform: scale(1.25); }
+    100% { transform: scale(1); }
+}
+.emo-lbl {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin: 0.3rem 0 0.15rem;
+}
+.emo-conf { font-size: 1rem; color: var(--text-secondary); }
 
-    /* ═══ SECTION HEADERS ═══ */
-    .sec-h {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.2rem;
-        font-weight: 600;
-        color: #c8d0e0;
-        margin: 1.5rem 0 0.8rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid rgba(124, 58, 237, 0.2);
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    .sec-h-glow {
-        width: 4px;
-        height: 20px;
-        background: linear-gradient(180deg, #7c3aed, #06d6a0);
-        border-radius: 2px;
-    }
+/* ── Metric Cards ── */
+.mg { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.7rem; margin: 0.8rem 0; }
+.mc {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.1rem;
+    text-align: center;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+}
+.mc::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-1), var(--accent-2));
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.mc:hover { transform: scale(1.02); }
+.mc:hover::after { opacity: 1; }
+.mv {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.7rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.ml {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-top: 0.25rem;
+}
 
-    /* ═══ TAB STYLING ═══ */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: rgba(255, 255, 255, 0.02);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 14px;
-        padding: 5px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 10px;
-        color: #6b7280;
-        font-weight: 500;
-        font-size: 0.9rem;
-        padding: 8px 16px;
-        transition: all 0.3s;
-    }
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #a78bfa;
-        background: rgba(124, 58, 237, 0.08);
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(6, 214, 160, 0.1)) !important;
-        color: #ffffff !important;
-        font-weight: 600;
-    }
+/* ── Section Header ── */
+.sh {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #c8d0e0;
+    margin: 1.3rem 0 0.7rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(124,58,237,0.18);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.sh-bar {
+    width: 3px;
+    height: 18px;
+    background: linear-gradient(180deg, var(--accent-1), var(--accent-2));
+    border-radius: 2px;
+    flex-shrink: 0;
+}
 
-    /* ═══ BUTTONS ═══ */
-    .stButton > button {
-        background: linear-gradient(135deg, #7c3aed, #06d6a0) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 12px !important;
-        padding: 0.75rem 2.5rem !important;
-        font-weight: 700 !important;
-        font-size: 1rem !important;
-        letter-spacing: 0.5px !important;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        box-shadow: 0 4px 20px rgba(124, 58, 237, 0.25) !important;
-        position: relative;
-        overflow: hidden;
-    }
-    .stButton > button:hover {
-        transform: translateY(-3px) !important;
-        box-shadow: 0 8px 30px rgba(124, 58, 237, 0.4) !important;
-    }
+/* ── Tag ── */
+.tag {
+    display: inline-block;
+    background: rgba(124,58,237,0.1);
+    border: 1px solid rgba(124,58,237,0.2);
+    color: #a78bfa;
+    padding: 0.2rem 0.65rem;
+    border-radius: 8px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+}
 
-    /* ═══ INPUTS ═══ */
-    .stSelectbox > div > div,
-    .stNumberInput > div > div > input {
-        background: rgba(255, 255, 255, 0.04) !important;
-        border-color: rgba(255, 255, 255, 0.08) !important;
-        color: #e0e6ed !important;
-        border-radius: 10px !important;
-    }
+/* ── Feature Row ── */
+.fr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.035);
+}
+.fn { color: #9ca3af; font-size: 0.82rem; }
+.fv {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: var(--accent-2);
+    font-weight: 600;
+}
 
-    /* ═══ DIVIDER ═══ */
-    .neon-divider {
-        height: 1px;
-        background: linear-gradient(90deg, transparent 5%, rgba(124, 58, 237, 0.3) 30%, rgba(6, 214, 160, 0.2) 70%, transparent 95%);
-        margin: 1.5rem 0;
-    }
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 3px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 14px;
+    padding: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.85rem;
+    padding: 8px 14px;
+    transition: all 0.3s;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: #a78bfa;
+    background: rgba(124,58,237,0.06);
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(124,58,237,0.18), rgba(6,214,160,0.08)) !important;
+    color: #fff !important;
+    font-weight: 600;
+}
 
-    /* ═══ STAT TAG ═══ */
-    .stat-tag {
-        display: inline-block;
-        background: rgba(124, 58, 237, 0.12);
-        border: 1px solid rgba(124, 58, 237, 0.2);
-        color: #a78bfa;
-        padding: 0.2rem 0.7rem;
-        border-radius: 8px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        font-family: 'JetBrains Mono', monospace;
-    }
+/* ── Buttons ── */
+.stButton > button {
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2)) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.7rem 2.2rem !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.4px !important;
+    box-shadow: 0 4px 18px rgba(124,58,237,0.22) !important;
+    transition: all 0.35s cubic-bezier(0.4,0,0.2,1) !important;
+}
+.stButton > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 28px rgba(124,58,237,0.35) !important;
+}
 
-    /* ═══ FEATURE ROW ═══ */
-    .feat-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.6rem 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    }
-    .feat-name { color: #9ca3af; font-size: 0.85rem; }
-    .feat-val {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.85rem;
-        color: #06d6a0;
-        font-weight: 600;
-    }
+/* ── Inputs ── */
+.stSelectbox > div > div,
+.stNumberInput > div > div > input {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: rgba(255,255,255,0.07) !important;
+    color: var(--text-primary) !important;
+    border-radius: 10px !important;
+}
 
-    /* ═══ FOOTER ═══ */
-    .app-footer {
-        text-align: center;
-        padding: 2rem 0 1rem;
-        color: #374151;
-        font-size: 0.75rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.03);
-        margin-top: 3rem;
-    }
-    .footer-glow {
-        display: inline-block;
-        background: linear-gradient(135deg, #7c3aed, #06d6a0);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-weight: 600;
-    }
+/* ── Footer ── */
+.foot {
+    text-align: center;
+    padding: 1.8rem 0 0.8rem;
+    color: #374151;
+    font-size: 0.72rem;
+    border-top: 1px solid rgba(255,255,255,0.03);
+    margin-top: 2.5rem;
+}
+.foot b {
+    background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================================
-# EMOTION CONFIGURATION
+# EMOTION CONFIG
 # ============================================================================
 
-EMOTION_CONFIG = {
-    'Happiness': {'emoji': '😊', 'color': '#fbbf24', 'glow': 'rgba(251,191,36,0.3)'},
-    'Sadness':   {'emoji': '😢', 'color': '#3b82f6', 'glow': 'rgba(59,130,246,0.3)'},
-    'Anger':     {'emoji': '😠', 'color': '#ef4444', 'glow': 'rgba(239,68,68,0.3)'},
-    'Anxiety':   {'emoji': '😰', 'color': '#f97316', 'glow': 'rgba(249,115,22,0.3)'},
-    'Boredom':   {'emoji': '😐', 'color': '#6b7280', 'glow': 'rgba(107,114,128,0.3)'},
-    'Neutral':   {'emoji': '😶', 'color': '#06d6a0', 'glow': 'rgba(6,214,160,0.3)'},
+EMO = {
+    "Happiness": {"emoji": "😊", "c": "#fbbf24", "g": "rgba(251,191,36,0.25)"},
+    "Sadness":   {"emoji": "😢", "c": "#3b82f6", "g": "rgba(59,130,246,0.25)"},
+    "Anger":     {"emoji": "😠", "c": "#ef4444", "g": "rgba(239,68,68,0.25)"},
+    "Anxiety":   {"emoji": "😰", "c": "#f97316", "g": "rgba(249,115,22,0.25)"},
+    "Boredom":   {"emoji": "😐", "c": "#6b7280", "g": "rgba(107,114,128,0.25)"},
+    "Neutral":   {"emoji": "😶", "c": "#06d6a0", "g": "rgba(6,214,160,0.25)"},
 }
-
 PLATFORMS = ["Instagram", "Twitter", "Facebook", "LinkedIn", "Snapchat", "Telegram", "Whatsapp"]
-GENDERS   = ["Female", "Male", "Non-binary"]
+GENDERS = ["Female", "Male", "Non-binary"]
 
 
 # ============================================================================
-# LOAD PRODUCTION ARTIFACTS
+# LOAD ARTIFACTS
 # ============================================================================
 
 @st.cache_resource
 def load_artifacts():
-    """
-    Load all serialized pipeline components into Streamlit's cache.
-    The pipeline exports a ChampionModelWrapper that always exposes
-    .predict_proba(). Keras champions use a lazy TF import to avoid
-    loading ~800MB into RAM when the model is tree-based.
-    """
+    """Load pipeline artifacts.  Keras uses lazy TF import."""
     with open("scaler.pkl", "rb") as f:
         scaler = pickle.load(f)
     with open("encoder.pkl", "rb") as f:
         encoder = pickle.load(f)
     with open("pipeline_metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
+        meta = pickle.load(f)
 
-    deploy_type = metadata.get("model_deployment_type", "")
+    dt = meta.get("model_deployment_type", "")
 
-    if deploy_type == "Keras":
+    if dt == "Keras":
         global TF_AVAILABLE
         try:
             import tensorflow as tf
             TF_AVAILABLE = True
         except ImportError:
-            TF_AVAILABLE = False
-            st.error("❌ Champion model is Keras but tensorflow is not installed.")
+            st.error("❌ Champion is Keras but tensorflow is not installed.")
             st.stop()
+        km = tf.keras.models.load_model("champion_model.keras")
 
-        keras_model = tf.keras.models.load_model("champion_model.keras")
-
-        class _KerasWrapper:
+        class _KW:
             def predict_proba(self, X):
-                return keras_model.predict(X, verbose=0)
+                return km.predict(X, verbose=0)
             def predict(self, X):
                 return np.argmax(self.predict_proba(X), axis=1)
 
-        model = _KerasWrapper()
+        mdl = _KW()
     else:
         with open("champion_model.pkl", "rb") as f:
-            model = pickle.load(f)
+            mdl = pickle.load(f)
 
-    tree_model = None
+    tm = None
     try:
         with open("best_tree_model.pkl", "rb") as f:
-            tree_model = pickle.load(f)
+            tm = pickle.load(f)
     except FileNotFoundError:
         pass
 
-    return model, scaler, encoder, metadata, tree_model
+    return mdl, scaler, encoder, meta, tm
 
 
 try:
-    model, scaler, encoder, metadata, tree_model = load_artifacts()
-    feature_names = metadata["retained_features_list"]
-    class_names   = metadata["label_encoder_classes"]
-    deploy_type   = metadata["model_deployment_type"]
-    n_classes     = metadata["n_classes"]
+    model, scaler, encoder, META, tree_model = load_artifacts()
+    FEATURES    = list(META.get("retained_features_list", []))
+    CLASSES     = list(META.get("label_encoder_classes", []))
+    DEPLOY_TYPE = META.get("model_deployment_type", "Unknown")
+    N_CLASSES   = META.get("n_classes", len(CLASSES))
 except Exception as e:
-    st.error(f"❌ Failed to load deployment artifacts. Error: {str(e)}")
-    st.info("Ensure champion_model.pkl/.keras, scaler.pkl, encoder.pkl, and pipeline_metadata.pkl exist in the repo.")
+    st.error(f"❌ Artifact loading failed: {e}")
+    st.info("Upload champion_model.pkl/.keras, scaler.pkl, encoder.pkl, pipeline_metadata.pkl.")
     st.stop()
 
 
 # ============================================================================
-# PREDICTION HELPERS
+# HELPERS
 # ============================================================================
 
 EPS = 1e-5
 
-def predict_single(input_scaled):
-    """Unified prediction — works for Tree, Ensemble, and Keras champions."""
-    probs = model.predict_proba(input_scaled)[0]
-    return probs
+
+def _predict(X_scaled):
+    """Return probability vector (1-D)."""
+    return model.predict_proba(X_scaled)[0]
 
 
-def build_input(age, gender, platform, usage, posts, likes, comments, messages):
-    """Build a fully-engineered, encoded, scaled single-row input."""
+def _build(age, gender, platform, usage, posts, likes, comments, messages):
+    """Engineer features → one-hot → scale.  Returns (scaled_array, raw_dict)."""
     raw = {
-        'Age': age,
-        'Daily_Usage_Time (minutes)': usage,
-        'Posts_Per_Day': posts,
-        'Likes_Received_Per_Day': likes,
-        'Comments_Received_Per_Day': comments,
-        'Messages_Sent_Per_Day': messages,
-        'Interaction_Density': (likes + comments) / (usage + EPS),
-        'Social_Velocity': likes / (posts + EPS),
-        'Conversational_Reciprocity': messages / (comments + EPS),
-        'Attention_Index': usage / (posts + EPS),
-        'Engagement_Ratio': (likes + comments + messages) / (usage + EPS),
-        'Content_Efficiency': likes / (usage * posts + EPS),
+        "Age": age,
+        "Daily_Usage_Time (minutes)": usage,
+        "Posts_Per_Day": posts,
+        "Likes_Received_Per_Day": likes,
+        "Comments_Received_Per_Day": comments,
+        "Messages_Sent_Per_Day": messages,
+        "Interaction_Density": (likes + comments) / (usage + EPS),
+        "Social_Velocity": likes / (posts + EPS),
+        "Conversational_Reciprocity": messages / (comments + EPS),
+        "Attention_Index": usage / (posts + EPS),
+        "Engagement_Ratio": (likes + comments + messages) / (usage + EPS),
+        "Content_Efficiency": likes / (usage * posts + EPS),
     }
-    df = pd.DataFrame(columns=feature_names, data=[np.zeros(len(feature_names))])
-    for col, val in raw.items():
-        if col in df.columns:
-            df[col] = val
-    gcol = f"Gender_{gender}"
-    pcol = f"Platform_{platform}"
-    if gcol in df.columns:
-        df[gcol] = 1.0
-    if pcol in df.columns:
-        df[pcol] = 1.0
-    return scaler.transform(df), raw
+    row = pd.DataFrame(columns=FEATURES, data=[np.zeros(len(FEATURES))])
+    for c, v in raw.items():
+        if c in row.columns:
+            row[c] = v
+    gc = f"Gender_{gender}"
+    pc = f"Platform_{platform}"
+    if gc in row.columns:
+        row[gc] = 1.0
+    if pc in row.columns:
+        row[pc] = 1.0
+    return scaler.transform(row), raw
 
 
-def get_engineered_features_display(raw):
-    """Return a formatted list of engineered feature names and values."""
-    eng = [
-        ("Interaction Density", raw.get('Interaction_Density', 0)),
-        ("Social Velocity", raw.get('Social_Velocity', 0)),
-        ("Conversational Reciprocity", raw.get('Conversational_Reciprocity', 0)),
-        ("Attention Index", raw.get('Attention_Index', 0)),
-        ("Engagement Ratio", raw.get('Engagement_Ratio', 0)),
-        ("Content Efficiency", raw.get('Content_Efficiency', 0)),
-    ]
-    return eng
-
-
-# ============================================================================
-# PLOTLY THEME HELPER
-# ============================================================================
-
-def styled_layout(height=380, **kwargs):
-    """Return common Plotly layout kwargs for the dark theme."""
-    base = dict(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#c8d0e0', family='Inter'),
-        margin=dict(l=20, r=20, t=30, b=20),
-        height=height,
+def _layout(h=380, **kw):
+    """Dark Plotly layout defaults."""
+    d = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#c8d0e0", family="Inter"),
+        margin=dict(l=20, r=20, t=25, b=20),
+        height=h,
     )
-    base.update(kwargs)
-    return base
+    d.update(kw)
+    return d
+
+
+def _emo(name):
+    """Safe emotion config lookup."""
+    return EMO.get(name, {"emoji": "🔮", "c": "#7c3aed", "g": "rgba(124,58,237,0.25)"})
+
+
+def _sec(title):
+    """Render a section header."""
+    st.markdown(f'<div class="sh"><div class="sh-bar"></div>{title}</div>', unsafe_allow_html=True)
 
 
 # ============================================================================
@@ -567,631 +511,700 @@ def styled_layout(height=380, **kwargs):
 # ============================================================================
 
 st.markdown("""
-<div class="hero-container">
-    <div class="hero-badge">AI-Powered Analytics</div>
+<div class="hero">
+    <div class="hero-badge">AI · ML · Deep Learning</div>
     <div class="hero-title">🧠 NeuroSense</div>
-    <div class="hero-subtitle">
-        Predict dominant emotional states from social media behavioral patterns
-        using ensemble machine learning & deep neural networks
-    </div>
+    <div class="hero-sub">Predict dominant emotional states from social media behaviour using ensemble ML &amp; neural networks</div>
 </div>
-<div class="neon-divider"></div>
+<div class="ndiv"></div>
 """, unsafe_allow_html=True)
 
 
 # ============================================================================
-# TABS — 6 Feature-Rich Tabs
+# 6  TABS
 # ============================================================================
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "🔮 Predict", "📁 Batch Analysis", "📊 Model Performance",
-    "🔬 Feature Lab", "🎛️ What-If Simulator", "ℹ️ About"
+t1, t2, t3, t4, t5, t6 = st.tabs([
+    "🔮 Predict", "📁 Batch", "📊 Performance",
+    "🔬 Feature Lab", "🎛️ What-If", "ℹ️ About",
 ])
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 1: 🔮 PREDICT EMOTION
-# ────────────────────────────────────────────────────────────────────────────
-with tab1:
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>User Profile & Engagement Metrics</div>', unsafe_allow_html=True)
-
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 1 — PREDICT
+# ═══════════════════════════════════════════════════════════════════════════
+with t1:
+    _sec("👤  User Profile & Engagement Metrics")
     c1, c2 = st.columns(2, gap="large")
-
     with c1:
-        st.markdown('<div class="glass">', unsafe_allow_html=True)
-        st.markdown("##### 👤 Demographics")
-        age      = st.slider("Age", 10, 90, 25, key="p_age")
-        gender   = st.selectbox("Gender", GENDERS, key="p_gender")
-        platform = st.selectbox("Platform", PLATFORMS, key="p_platform")
-        st.markdown('</div>', unsafe_allow_html=True)
-
+        st.markdown('<div class="gl">', unsafe_allow_html=True)
+        st.markdown("##### Demographics")
+        p_age  = st.slider("Age", 10, 90, 25, key="p_age")
+        p_gen  = st.selectbox("Gender", GENDERS, key="p_gen")
+        p_plat = st.selectbox("Platform", PLATFORMS, key="p_plat")
+        st.markdown("</div>", unsafe_allow_html=True)
     with c2:
-        st.markdown('<div class="glass">', unsafe_allow_html=True)
-        st.markdown("##### 📊 Daily Engagement")
-        usage    = st.number_input("Usage Time (min)", 1, 1440, 120, key="p_usage")
-        posts    = st.number_input("Posts Per Day", 0, 100, 3, key="p_posts")
-        likes    = st.number_input("Likes Received", 0, 10000, 45, key="p_likes")
-        comments = st.number_input("Comments Received", 0, 5000, 10, key="p_comments")
-        messages = st.number_input("Messages Sent", 0, 5000, 15, key="p_messages")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div class="gl">', unsafe_allow_html=True)
+        st.markdown("##### Daily Engagement")
+        p_use = st.number_input("Usage Time (min)", 1, 1440, 120, key="p_use")
+        p_pos = st.number_input("Posts", 0, 100, 3, key="p_pos")
+        p_lik = st.number_input("Likes Received", 0, 10000, 45, key="p_lik")
+        p_com = st.number_input("Comments Received", 0, 5000, 10, key="p_com")
+        p_msg = st.number_input("Messages Sent", 0, 5000, 15, key="p_msg")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="neon-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ndiv"></div>', unsafe_allow_html=True)
+    _, btn_col, _ = st.columns([1, 1, 1])
+    with btn_col:
+        go_pred = st.button("🚀  Analyze Profile", use_container_width=True, key="go_pred")
 
-    bcol1, bcol2, bcol3 = st.columns([1, 1, 1])
-    with bcol2:
-        predict_btn = st.button("🚀  Analyze Profile", use_container_width=True, key="predict_btn")
+    if go_pred:
+        xs, raw = _build(p_age, p_gen, p_plat, p_use, p_pos, p_lik, p_com, p_msg)
+        probs   = _predict(xs)
+        idx     = int(np.argmax(probs))
+        emo_n   = CLASSES[idx]
+        conf    = float(probs[idx])
+        ec      = _emo(emo_n)
 
-    if predict_btn:
-        inp_scaled, raw_feats = build_input(age, gender, platform, usage, posts, likes, comments, messages)
-        probs     = predict_single(inp_scaled)
-        pred_idx  = int(np.argmax(probs))
-        pred_emo  = class_names[pred_idx]
-        conf      = float(probs[pred_idx])
-        emo_cfg   = EMOTION_CONFIG.get(pred_emo, {'emoji': '🔮', 'color': '#7c3aed', 'glow': 'rgba(124,58,237,0.3)'})
-
-        # ── Result Card ──
+        # ── result card ──
         st.markdown(f"""
-        <div class="neon-card" style="border-color: {emo_cfg['color']}40;
-             box-shadow: 0 0 60px {emo_cfg['glow']};">
-            <div class="emo-icon">{emo_cfg['emoji']}</div>
-            <div class="emo-label" style="color: {emo_cfg['color']};">{pred_emo}</div>
+        <div class="neon" style="border-color:{ec['c']}40; box-shadow:0 0 50px {ec['g']};">
+            <div class="emo-icon">{ec['emoji']}</div>
+            <div class="emo-lbl" style="color:{ec['c']};">{emo_n}</div>
             <div class="emo-conf">Confidence: <strong>{conf:.1%}</strong></div>
         </div>
         """, unsafe_allow_html=True)
 
-        # ── Charts Row ──
+        # ── radar + bar ──
         r1, r2 = st.columns(2, gap="large")
-
         with r1:
-            st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Probability Radar</div>', unsafe_allow_html=True)
-            radar = go.Figure()
-            radar.add_trace(go.Scatterpolar(
+            _sec("🎯 Probability Radar")
+            rfig = go.Figure(go.Scatterpolar(
                 r=list(probs) + [probs[0]],
-                theta=class_names + [class_names[0]],
-                fill='toself',
-                fillcolor='rgba(124, 58, 237, 0.12)',
-                line=dict(color='#7c3aed', width=2.5),
-                marker=dict(size=7, color='#06d6a0'),
+                theta=CLASSES + [CLASSES[0]],
+                fill="toself",
+                fillcolor="rgba(124,58,237,0.1)",
+                line=dict(color="#7c3aed", width=2.5),
+                marker=dict(size=6, color="#06d6a0"),
             ))
-            radar.update_layout(**styled_layout(
+            rfig.update_layout(**_layout(
                 polar=dict(
-                    bgcolor='rgba(0,0,0,0)',
-                    radialaxis=dict(visible=True, range=[0, 1], gridcolor='rgba(255,255,255,0.06)', tickfont=dict(size=9, color='#4b5563')),
-                    angularaxis=dict(gridcolor='rgba(255,255,255,0.04)', tickfont=dict(size=11, color='#9ca3af')),
-                ),
-                showlegend=False,
+                    bgcolor="rgba(0,0,0,0)",
+                    radialaxis=dict(visible=True, range=[0, 1],
+                                    gridcolor="rgba(255,255,255,0.05)",
+                                    tickfont=dict(size=9, color="#4b5563")),
+                    angularaxis=dict(gridcolor="rgba(255,255,255,0.04)",
+                                     tickfont=dict(size=10, color="#9ca3af")),
+                ), showlegend=False,
             ))
-            st.plotly_chart(radar, use_container_width=True)
+            st.plotly_chart(rfig, use_container_width=True)
 
         with r2:
-            st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Class Probabilities</div>', unsafe_allow_html=True)
-            pdf = pd.DataFrame({'Emotion': class_names, 'Probability': probs}).sort_values('Probability', ascending=True)
-            bcolors = [EMOTION_CONFIG.get(e, {}).get('color', '#7c3aed') for e in pdf['Emotion']]
-            bar = go.Figure(go.Bar(
-                x=pdf['Probability'], y=pdf['Emotion'], orientation='h',
-                marker=dict(color=bcolors, line=dict(width=0)),
-                text=[f'{p:.1%}' for p in pdf['Probability']],
-                textposition='outside', textfont=dict(color='#9ca3af', size=11),
+            _sec("📊 Class Probabilities")
+            bdf = pd.DataFrame({"Emotion": CLASSES, "P": probs}).sort_values("P")
+            bcolors = [_emo(e)["c"] for e in bdf["Emotion"]]
+            bfig = go.Figure(go.Bar(
+                x=bdf["P"], y=bdf["Emotion"], orientation="h",
+                marker=dict(color=bcolors),
+                text=[f"{p:.1%}" for p in bdf["P"]],
+                textposition="outside",
+                textfont=dict(color="#9ca3af", size=11),
             ))
-            bar.update_layout(**styled_layout(
-                xaxis=dict(range=[0, 1], gridcolor='rgba(255,255,255,0.03)', tickformat='.0%', tickfont=dict(color='#4b5563')),
-                yaxis=dict(tickfont=dict(color='#c8d0e0', size=11)),
+            bfig.update_layout(**_layout(
+                xaxis=dict(range=[0, 1], gridcolor="rgba(255,255,255,0.03)",
+                           tickformat=".0%", tickfont=dict(color="#4b5563")),
+                yaxis=dict(tickfont=dict(color="#c8d0e0", size=11)),
             ))
-            st.plotly_chart(bar, use_container_width=True)
+            st.plotly_chart(bfig, use_container_width=True)
 
-        # ── Confidence Gauge ──
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Confidence Gauge</div>', unsafe_allow_html=True)
-        gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
+        # ── gauge ──
+        _sec("⚡ Confidence Gauge")
+        gfig = go.Figure(go.Indicator(
+            mode="gauge+number",
             value=conf * 100,
-            number=dict(suffix="%", font=dict(size=40, color='#e0e6ed')),
+            number=dict(suffix="%", font=dict(size=38, color="#e0e6ed")),
             gauge=dict(
-                axis=dict(range=[0, 100], tickcolor='#4b5563'),
-                bar=dict(color=emo_cfg['color']),
-                bgcolor='rgba(255,255,255,0.03)',
-                bordercolor='rgba(255,255,255,0.06)',
+                axis=dict(range=[0, 100], tickcolor="#4b5563"),
+                bar=dict(color=ec["c"]),
+                bgcolor="rgba(255,255,255,0.02)",
+                bordercolor="rgba(255,255,255,0.05)",
                 steps=[
-                    dict(range=[0, 33], color='rgba(239,68,68,0.1)'),
-                    dict(range=[33, 66], color='rgba(249,115,22,0.1)'),
-                    dict(range=[66, 100], color='rgba(6,214,160,0.1)'),
+                    dict(range=[0, 33],  color="rgba(239,68,68,0.08)"),
+                    dict(range=[33, 66], color="rgba(249,115,22,0.08)"),
+                    dict(range=[66, 100], color="rgba(6,214,160,0.08)"),
                 ],
-                threshold=dict(line=dict(color='#06d6a0', width=3), thickness=0.8, value=conf*100),
+                threshold=dict(line=dict(color="#06d6a0", width=3),
+                               thickness=0.8, value=conf * 100),
             ),
         ))
-        gauge.update_layout(**styled_layout(height=250))
-        st.plotly_chart(gauge, use_container_width=True)
+        gfig.update_layout(**_layout(h=240))
+        st.plotly_chart(gfig, use_container_width=True)
 
-        # ── Engineered Features Breakdown ──
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Engineered Features</div>', unsafe_allow_html=True)
-        eng_feats = get_engineered_features_display(raw_feats)
-        feat_html = ""
-        for fname, fval in eng_feats:
-            feat_html += f'<div class="feat-row"><span class="feat-name">{fname}</span><span class="feat-val">{fval:.4f}</span></div>'
-        st.markdown(f'<div class="glass">{feat_html}</div>', unsafe_allow_html=True)
+        # ── engineered features ──
+        _sec("🧬 Engineered Features")
+        eng_names = [
+            ("Interaction Density", "Interaction_Density"),
+            ("Social Velocity", "Social_Velocity"),
+            ("Conversational Reciprocity", "Conversational_Reciprocity"),
+            ("Attention Index", "Attention_Index"),
+            ("Engagement Ratio", "Engagement_Ratio"),
+            ("Content Efficiency", "Content_Efficiency"),
+        ]
+        fhtml = ""
+        for label, key in eng_names:
+            fhtml += f'<div class="fr"><span class="fn">{label}</span><span class="fv">{raw.get(key, 0):.4f}</span></div>'
+        st.markdown(f'<div class="gl">{fhtml}</div>', unsafe_allow_html=True)
 
-        # ── SHAP Explanation ──
+        # ── SHAP ──
         if SHAP_AVAILABLE and tree_model is not None:
-            st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>SHAP Feature Explanation</div>', unsafe_allow_html=True)
+            _sec("🔍 SHAP Feature Explanation")
             try:
                 import matplotlib.pyplot as plt
-                inp_df = pd.DataFrame(inp_scaled, columns=feature_names)
-                explainer = shap.TreeExplainer(tree_model)
-                sv = explainer(inp_df)
-                if hasattr(sv, 'values') and sv.values.ndim == 3:
-                    sv_single = shap.Explanation(
-                        values=sv.values[0, :, pred_idx],
-                        base_values=sv.base_values[0][pred_idx] if isinstance(sv.base_values[0], (list, np.ndarray)) else sv.base_values[0],
-                        data=sv.data[0], feature_names=feature_names,
+                idf = pd.DataFrame(xs, columns=FEATURES)
+                expl = shap.TreeExplainer(tree_model)
+                sv   = expl(idf)
+                if hasattr(sv, "values") and sv.values.ndim == 3:
+                    bv = sv.base_values[0]
+                    if isinstance(bv, (list, np.ndarray)):
+                        bv = bv[idx]
+                    sv0 = shap.Explanation(
+                        values=sv.values[0, :, idx],
+                        base_values=bv,
+                        data=sv.data[0],
+                        feature_names=FEATURES,
                     )
                 else:
-                    sv_single = sv[0]
-                fig_shap, _ = plt.subplots(figsize=(10, 4))
-                shap.plots.waterfall(sv_single, show=False)
+                    sv0 = sv[0]
+                shap.plots.waterfall(sv0, show=False)
                 st.pyplot(plt.gcf())
-                plt.close('all')
-            except Exception as e:
-                st.caption(f"SHAP unavailable: {str(e)[:120]}")
+                plt.close("all")
+            except Exception as ex:
+                st.caption(f"SHAP unavailable: {str(ex)[:120]}")
+
+        # ── all-class sunburst ──
+        _sec("🌐 Probability Sunburst")
+        sb_df = pd.DataFrame({"Emotion": CLASSES, "Probability": probs})
+        sb_fig = px.sunburst(
+            sb_df, path=["Emotion"], values="Probability",
+            color="Probability",
+            color_continuous_scale=[[0, "#7c3aed"], [1, "#06d6a0"]],
+        )
+        sb_fig.update_layout(**_layout(h=350))
+        sb_fig.update_traces(textfont=dict(color="white"))
+        st.plotly_chart(sb_fig, use_container_width=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 2: 📁 BATCH ANALYSIS
-# ────────────────────────────────────────────────────────────────────────────
-with tab2:
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Batch Prediction — CSV Upload</div>', unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 2 — BATCH ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+with t2:
+    _sec("📁 Batch Prediction — CSV Upload")
 
     st.markdown("""
-    <div class="glass">
-        <p style="margin:0;">Upload a CSV with columns: <code style="color:#06d6a0;">Age, Gender, Platform,
-        Daily_Usage_Time (minutes), Posts_Per_Day, Likes_Received_Per_Day,
-        Comments_Received_Per_Day, Messages_Sent_Per_Day</code></p>
-        <p style="color:#6b7280; margin-top:0.5rem; margin-bottom:0;">
-        The system will engineer features, encode categoricals, and predict emotions for every row.</p>
+    <div class="gl">
+        <p style="margin:0; color:#9ca3af;">Upload a CSV with columns:
+        <code style="color:#06d6a0;">Age, Gender, Platform, Daily_Usage_Time (minutes),
+        Posts_Per_Day, Likes_Received_Per_Day, Comments_Received_Per_Day,
+        Messages_Sent_Per_Day</code></p>
     </div>
     """, unsafe_allow_html=True)
 
-    uploaded = st.file_uploader("Choose CSV", type=["csv"], key="batch_up")
+    up = st.file_uploader("Choose CSV", type=["csv"], key="batch_up")
 
-    if uploaded is not None:
+    if up is not None:
         try:
-            bdf = pd.read_csv(uploaded)
-            st.markdown(f'<span class="stat-tag">{len(bdf)} rows × {len(bdf.columns)} cols</span>', unsafe_allow_html=True)
-
-            with st.expander("📋 Preview uploaded data", expanded=True):
+            bdf = pd.read_csv(up)
+            st.markdown(
+                f'<span class="tag">{len(bdf)} rows × {len(bdf.columns)} cols</span>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("📋 Preview", expanded=True):
                 st.dataframe(bdf.head(10), use_container_width=True)
 
-            if st.button("🚀  Run Batch Predictions", key="batch_go"):
-                results = []
-                prog = st.progress(0)
+            if st.button("🚀  Run Batch", key="batch_go"):
+                res = []
+                bar = st.progress(0, text="Predicting…")
                 for i, (_, row) in enumerate(bdf.iterrows()):
                     try:
-                        inp_s, _ = build_input(
-                            row.get('Age', 25), row.get('Gender', 'Male'),
-                            row.get('Platform', 'Instagram'),
-                            row.get('Daily_Usage_Time (minutes)', 60),
-                            row.get('Posts_Per_Day', 2), row.get('Likes_Received_Per_Day', 20),
-                            row.get('Comments_Received_Per_Day', 5), row.get('Messages_Sent_Per_Day', 10),
+                        xs, _ = _build(
+                            row.get("Age", 25),
+                            row.get("Gender", "Male"),
+                            row.get("Platform", "Instagram"),
+                            row.get("Daily_Usage_Time (minutes)", 60),
+                            row.get("Posts_Per_Day", 2),
+                            row.get("Likes_Received_Per_Day", 20),
+                            row.get("Comments_Received_Per_Day", 5),
+                            row.get("Messages_Sent_Per_Day", 10),
                         )
-                        pr = predict_single(inp_s)
+                        pr = _predict(xs)
                         pi = int(np.argmax(pr))
-                        results.append({'Predicted_Emotion': class_names[pi], 'Confidence': float(pr[pi])})
+                        res.append({"Predicted_Emotion": CLASSES[pi],
+                                    "Confidence": float(pr[pi])})
                     except Exception:
-                        results.append({'Predicted_Emotion': 'Error', 'Confidence': 0.0})
-                    prog.progress((i + 1) / len(bdf))
+                        res.append({"Predicted_Emotion": "Error", "Confidence": 0.0})
+                    bar.progress((i + 1) / len(bdf))
+                bar.empty()
 
-                rdf = pd.concat([bdf, pd.DataFrame(results)], axis=1)
-
-                st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Results</div>', unsafe_allow_html=True)
+                rdf = pd.concat([bdf, pd.DataFrame(res)], axis=1)
+                _sec("📊 Results")
                 st.dataframe(rdf, use_container_width=True)
 
-                # ── Summary Row ──
                 sc1, sc2 = st.columns(2)
                 with sc1:
-                    edist = rdf['Predicted_Emotion'].value_counts()
-                    pie = px.pie(values=edist.values, names=edist.index,
-                                 color=edist.index,
-                                 color_discrete_map={e: c['color'] for e, c in EMOTION_CONFIG.items()},
-                                 title="Predicted Distribution")
-                    pie.update_layout(**styled_layout(height=350))
-                    st.plotly_chart(pie, use_container_width=True)
-
+                    ed = rdf["Predicted_Emotion"].value_counts()
+                    pfig = px.pie(
+                        values=ed.values, names=ed.index, color=ed.index,
+                        color_discrete_map={e: v["c"] for e, v in EMO.items()},
+                        title="Distribution",
+                    )
+                    pfig.update_layout(**_layout(h=340))
+                    st.plotly_chart(pfig, use_container_width=True)
                 with sc2:
-                    avg_c = rdf['Confidence'].mean()
+                    ac = rdf["Confidence"].mean()
+                    top_emo = ed.index[0] if len(ed) > 0 else "N/A"
                     st.markdown(f"""
-                    <div class="glass" style="text-align:center; padding:2rem;">
-                        <div class="m-val">{avg_c:.1%}</div>
-                        <div class="m-label">Average Confidence</div>
-                        <div style="margin-top:1.5rem;">
-                            <div class="m-val">{len(rdf)}</div>
-                            <div class="m-label">Total Predictions</div>
-                        </div>
-                        <div style="margin-top:1.5rem;">
-                            <div class="m-val">{edist.index[0]}</div>
-                            <div class="m-label">Most Common Emotion</div>
-                        </div>
+                    <div class="gl" style="text-align:center; padding:2rem;">
+                        <div class="mv">{ac:.1%}</div><div class="ml">Avg Confidence</div>
+                        <div style="margin-top:1.2rem;"><div class="mv">{len(rdf)}</div><div class="ml">Total Rows</div></div>
+                        <div style="margin-top:1.2rem;"><div class="mv">{top_emo}</div><div class="ml">Most Frequent</div></div>
                     </div>
                     """, unsafe_allow_html=True)
 
                 csv_out = rdf.to_csv(index=False)
-                st.download_button("⬇️  Download Results", csv_out, "neurosense_predictions.csv", "text/csv")
+                st.download_button("⬇️  Download CSV", csv_out,
+                                   "neurosense_predictions.csv", "text/csv")
 
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+        except Exception as ex:
+            st.error(f"Error: {ex}")
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 3: 📊 MODEL PERFORMANCE
-# ────────────────────────────────────────────────────────────────────────────
-with tab3:
-    champ_name = metadata.get('champion_model_name', 'Unknown')
-    perf_data  = metadata.get('model_performance', [])
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 3 — MODEL PERFORMANCE
+# ═══════════════════════════════════════════════════════════════════════════
+with t3:
+    champ = META.get("champion_model_name", "Unknown")
+    perf  = META.get("model_performance", [])
 
-    # ── Champion Banner ──
+    # champion banner
     st.markdown(f"""
-    <div class="neon-card">
-        <div style="font-size:0.7rem; color:#6b7280; text-transform:uppercase; letter-spacing:2px;">Champion Model</div>
-        <div style="font-family:'Space Grotesk'; font-size:2.2rem; font-weight:700;
-             background: linear-gradient(135deg, #7c3aed, #06d6a0);
+    <div class="neon">
+        <div style="font-size:0.65rem; color:#6b7280; text-transform:uppercase; letter-spacing:2.5px;">Champion</div>
+        <div style="font-family:'Space Grotesk'; font-size:2rem; font-weight:700;
+             background:linear-gradient(135deg,#7c3aed,#06d6a0);
              -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin:0.3rem 0;">
-            🏆 {champ_name}
+            🏆 {champ}
         </div>
-        <div><span class="stat-tag">{deploy_type}</span></div>
+        <span class="tag">{DEPLOY_TYPE}</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Metric Cards ──
-    if perf_data:
-        cp = perf_data[0]
-        st.markdown(f"""
-        <div class="metric-grid">
-            <div class="m-card"><div class="m-val">{cp.get('Accuracy',0):.4f}</div><div class="m-label">Accuracy</div></div>
-            <div class="m-card"><div class="m-val">{cp.get('Precision (W)',0):.4f}</div><div class="m-label">Precision (W)</div></div>
-            <div class="m-card"><div class="m-val">{cp.get('Recall (W)',0):.4f}</div><div class="m-label">Recall (W)</div></div>
-            <div class="m-card"><div class="m-val">{cp.get('F1-Score (W)',0):.4f}</div><div class="m-label">F1-Score (W)</div></div>
-            <div class="m-card"><div class="m-val">{cp.get('Precision (Macro)',0):.4f}</div><div class="m-label">Precision (M)</div></div>
-            <div class="m-card"><div class="m-val">{cp.get('F1-Score (Macro)',0):.4f}</div><div class="m-label">F1-Score (M)</div></div>
-        </div>
-        """, unsafe_allow_html=True)
+    # metric cards
+    if perf:
+        cp = perf[0]
+        keys = [
+            ("Accuracy", "Accuracy"), ("Precision (W)", "Precision W"),
+            ("Recall (W)", "Recall W"), ("F1-Score (W)", "F1 Weighted"),
+            ("Precision (Macro)", "Precision M"), ("F1-Score (Macro)", "F1 Macro"),
+        ]
+        cards = ""
+        for k, label in keys:
+            v = cp.get(k, 0)
+            cards += f'<div class="mc"><div class="mv">{v:.4f}</div><div class="ml">{label}</div></div>'
+        st.markdown(f'<div class="mg">{cards}</div>', unsafe_allow_html=True)
 
-    # ── All Models Comparison ──
-    if perf_data:
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>All Models — Performance Comparison</div>', unsafe_allow_html=True)
-        pdf = pd.DataFrame(perf_data)
-        st.dataframe(pdf.style.format({c: '{:.4f}' for c in pdf.columns if c != 'Model'})
-                     .highlight_max(subset=[c for c in pdf.columns if c != 'Model'], color='rgba(6,214,160,0.15)'),
-                     use_container_width=True)
+    # all models table
+    if perf:
+        _sec("📈 All Models Comparison")
+        pdf = pd.DataFrame(perf)
+        num_cols = [c for c in pdf.columns if c != "Model"]
+        st.dataframe(
+            pdf.style
+            .format({c: "{:.4f}" for c in num_cols})
+            .highlight_max(subset=num_cols, color="rgba(6,214,160,0.12)"),
+            use_container_width=True,
+        )
 
-        # ── F1 Score Bar Race ──
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>F1-Score Comparison</div>', unsafe_allow_html=True)
-        pdf_sorted = pdf.sort_values('F1-Score (W)', ascending=True)
-        f1_fig = go.Figure(go.Bar(
-            x=pdf_sorted['F1-Score (W)'], y=pdf_sorted['Model'], orientation='h',
-            marker=dict(
-                color=pdf_sorted['F1-Score (W)'],
-                colorscale=[[0, '#7c3aed'], [1, '#06d6a0']],
-            ),
-            text=[f'{v:.4f}' for v in pdf_sorted['F1-Score (W)']],
-            textposition='outside', textfont=dict(color='#9ca3af', size=11),
-        ))
-        f1_fig.update_layout(**styled_layout(
-            height=max(250, len(pdf_sorted) * 45),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.03)', tickfont=dict(color='#4b5563')),
-            yaxis=dict(tickfont=dict(color='#c8d0e0', size=11)),
-        ))
-        st.plotly_chart(f1_fig, use_container_width=True)
+        # F1 bar
+        _sec("📊 F1-Score (Weighted) Ranking")
+        f1col = "F1-Score (W)"
+        if f1col in pdf.columns:
+            ps = pdf.sort_values(f1col, ascending=True)
+            ff = go.Figure(go.Bar(
+                x=ps[f1col], y=ps["Model"], orientation="h",
+                marker=dict(color=ps[f1col],
+                            colorscale=[[0, "#7c3aed"], [1, "#06d6a0"]]),
+                text=[f"{v:.4f}" for v in ps[f1col]],
+                textposition="outside",
+                textfont=dict(color="#9ca3af", size=11),
+            ))
+            ff.update_layout(**_layout(
+                h=max(250, len(ps) * 42),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.03)",
+                           tickfont=dict(color="#4b5563")),
+                yaxis=dict(tickfont=dict(color="#c8d0e0", size=11)),
+            ))
+            st.plotly_chart(ff, use_container_width=True)
 
-    # ── Feature Importance + Confusion Matrix ──
+    # feature importance + confusion matrix
     ic1, ic2 = st.columns(2, gap="large")
 
+    fimp = META.get("feature_importance", {})
     with ic1:
-        fimp = metadata.get('feature_importance', {})
         if fimp:
-            st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Feature Importance</div>', unsafe_allow_html=True)
-            idf = pd.DataFrame({'Feature': list(fimp.keys()), 'Importance': list(fimp.values())}).sort_values('Importance', ascending=True).tail(15)
-            imp_fig = go.Figure(go.Bar(
-                x=idf['Importance'], y=idf['Feature'], orientation='h',
-                marker=dict(color=idf['Importance'], colorscale=[[0, '#7c3aed'], [1, '#06d6a0']]),
-                text=[f'{v:.4f}' for v in idf['Importance']],
-                textposition='outside', textfont=dict(color='#9ca3af', size=10),
+            _sec("🎯 Feature Importance")
+            idf = (pd.DataFrame({"F": list(fimp.keys()), "I": list(fimp.values())})
+                     .sort_values("I", ascending=True).tail(15))
+            ifig = go.Figure(go.Bar(
+                x=idf["I"], y=idf["F"], orientation="h",
+                marker=dict(color=idf["I"],
+                            colorscale=[[0, "#7c3aed"], [1, "#06d6a0"]]),
+                text=[f"{v:.4f}" for v in idf["I"]],
+                textposition="outside",
+                textfont=dict(color="#9ca3af", size=10),
             ))
-            imp_fig.update_layout(**styled_layout(height=400,
-                xaxis=dict(gridcolor='rgba(255,255,255,0.03)', tickfont=dict(color='#4b5563')),
-                yaxis=dict(tickfont=dict(color='#c8d0e0', size=10)),
+            ifig.update_layout(**_layout(h=400,
+                xaxis=dict(gridcolor="rgba(255,255,255,0.03)",
+                           tickfont=dict(color="#4b5563")),
+                yaxis=dict(tickfont=dict(color="#c8d0e0", size=10)),
             ))
-            st.plotly_chart(imp_fig, use_container_width=True)
+            st.plotly_chart(ifig, use_container_width=True)
 
+    cm_raw = META.get("confusion_matrix")
     with ic2:
-        cm = metadata.get('confusion_matrix', None)
-        if cm is not None:
-            st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Confusion Matrix</div>', unsafe_allow_html=True)
-            cma = np.array(cm)
-            cmn = cma.astype('float') / cma.sum(axis=1, keepdims=True)
-            cm_fig = go.Figure(go.Heatmap(
-                z=cmn, x=class_names, y=class_names,
-                colorscale=[[0, '#05051a'], [0.5, '#7c3aed'], [1, '#06d6a0']],
-                text=[[f'{v:.2f}' for v in row] for row in cmn],
-                texttemplate='%{text}', textfont=dict(size=11, color='white'),
+        if cm_raw is not None:
+            _sec("🗺️ Confusion Matrix")
+            cma = np.array(cm_raw, dtype=float)
+            row_sums = cma.sum(axis=1, keepdims=True)
+            row_sums[row_sums == 0] = 1          # prevent /0
+            cmn = cma / row_sums
+            cfig = go.Figure(go.Heatmap(
+                z=cmn, x=CLASSES, y=CLASSES,
+                colorscale=[[0, "#05051a"], [0.5, "#7c3aed"], [1, "#06d6a0"]],
+                text=[[f"{v:.2f}" for v in r] for r in cmn],
+                texttemplate="%{text}",
+                textfont=dict(size=11, color="white"),
             ))
-            cm_fig.update_layout(**styled_layout(height=400,
-                xaxis=dict(title='Predicted', tickfont=dict(color='#c8d0e0')),
-                yaxis=dict(title='True', tickfont=dict(color='#c8d0e0'), autorange='reversed'),
+            cfig.update_layout(**_layout(h=400,
+                xaxis=dict(title="Predicted", tickfont=dict(color="#c8d0e0")),
+                yaxis=dict(title="True", tickfont=dict(color="#c8d0e0"),
+                           autorange="reversed"),
             ))
-            st.plotly_chart(cm_fig, use_container_width=True)
+            st.plotly_chart(cfig, use_container_width=True)
 
-    # ── Class Distribution ──
-    cdist = metadata.get('class_distribution', {})
+    # class distribution
+    cdist = META.get("class_distribution", {})
     if cdist:
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Training Class Distribution</div>', unsafe_allow_html=True)
-        dist_df = pd.DataFrame({'Emotion': [class_names[int(k)] for k in cdist.keys()], 'Count': list(cdist.values())})
-        dist_colors = [EMOTION_CONFIG.get(e, {}).get('color', '#7c3aed') for e in dist_df['Emotion']]
-        dfig = go.Figure(go.Bar(x=dist_df['Emotion'], y=dist_df['Count'],
-                                marker=dict(color=dist_colors), text=dist_df['Count'], textposition='outside',
-                                textfont=dict(color='#9ca3af')))
-        dfig.update_layout(**styled_layout(height=300,
-            xaxis=dict(tickfont=dict(color='#c8d0e0')),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.03)', tickfont=dict(color='#4b5563')),
+        _sec("📦 Training Class Distribution")
+        try:
+            dist_labels = [CLASSES[int(k)] if int(k) < len(CLASSES) else str(k)
+                           for k in cdist.keys()]
+        except (ValueError, IndexError):
+            dist_labels = list(cdist.keys())
+        dist_vals = list(cdist.values())
+        dc = [_emo(l)["c"] for l in dist_labels]
+        dfig = go.Figure(go.Bar(
+            x=dist_labels, y=dist_vals,
+            marker=dict(color=dc),
+            text=dist_vals, textposition="outside",
+            textfont=dict(color="#9ca3af"),
+        ))
+        dfig.update_layout(**_layout(h=280,
+            xaxis=dict(tickfont=dict(color="#c8d0e0")),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.03)",
+                       tickfont=dict(color="#4b5563")),
         ))
         st.plotly_chart(dfig, use_container_width=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 4: 🔬 FEATURE LAB
-# ────────────────────────────────────────────────────────────────────────────
-with tab4:
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Feature Engineering Explained</div>', unsafe_allow_html=True)
-
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 4 — FEATURE LAB
+# ═══════════════════════════════════════════════════════════════════════════
+with t4:
+    _sec("🧬 Engineered Features — Explained")
     st.markdown("""
-    <div class="glass">
-        <p style="color:#9ca3af; margin:0;">The pipeline engineers <strong style="color:#06d6a0;">6 derived features</strong>
-        from the raw social media metrics. These capture behavioral patterns that raw counts alone cannot represent.</p>
-    </div>
+    <div class="gl"><p style="color:#9ca3af; margin:0;">
+    The pipeline derives <strong style="color:#06d6a0;">6 behavioural interaction features</strong>
+    from raw social media metrics.  These capture engagement patterns that raw counts alone cannot express.
+    </p></div>
     """, unsafe_allow_html=True)
 
-    eng_info = [
-        ("Interaction Density", "(Likes + Comments) / Usage Time", "How intensely a user engages per minute of screen time"),
-        ("Social Velocity", "Likes / Posts", "Average likes earned per content piece — measures content quality"),
-        ("Conversational Reciprocity", "Messages / Comments", "Ratio of outgoing messages to incoming comments — social balance"),
-        ("Attention Index", "Usage Time / Posts", "Time spent per post — passive consumers score high here"),
-        ("Engagement Ratio", "(Likes + Comments + Messages) / Usage Time", "Holistic engagement intensity across all interaction types"),
-        ("Content Efficiency", "Likes / (Usage Time × Posts)", "Per-post, per-minute effectiveness — content ROI"),
+    eng_cards = [
+        ("Interaction Density", "(Likes + Comments) / Usage", "Engagement intensity per minute of screen time"),
+        ("Social Velocity", "Likes / Posts", "Average likes per content piece — content quality signal"),
+        ("Conversational Reciprocity", "Messages / Comments", "Outgoing-to-incoming ratio — social balance"),
+        ("Attention Index", "Usage / Posts", "Time per post — passive consumers score high"),
+        ("Engagement Ratio", "(L + C + M) / Usage", "Holistic engagement across all interaction types"),
+        ("Content Efficiency", "Likes / (Usage × Posts)", "Per-post, per-minute effectiveness — content ROI"),
     ]
-
-    for fname, formula, desc in eng_info:
+    for name, formula, desc in eng_cards:
         st.markdown(f"""
-        <div class="glass" style="padding:1rem 1.5rem;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="gl" style="padding:1rem 1.4rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                 <div>
-                    <div style="color:#e0e6ed; font-weight:600; font-size:1rem;">{fname}</div>
-                    <div style="color:#6b7280; font-size:0.8rem; margin-top:0.2rem;">{desc}</div>
+                    <div style="color:#e0e6ed; font-weight:600;">{name}</div>
+                    <div style="color:#6b7280; font-size:0.78rem; margin-top:0.15rem;">{desc}</div>
                 </div>
-                <div class="stat-tag" style="white-space:nowrap;">{formula}</div>
+                <span class="tag" style="white-space:nowrap;">{formula}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Feature Correlation Heatmap ──
-    fimp = metadata.get('feature_importance', {})
+    # importance ranking
     if fimp:
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Feature Importance Ranking</div>', unsafe_allow_html=True)
-
+        _sec("🏅 Feature Importance Ranking")
         ranked = sorted(fimp.items(), key=lambda x: x[1], reverse=True)
-        rank_html = ""
+        max_val = ranked[0][1] if ranked else 1
+        rhtml = ""
         for i, (fn, fv) in enumerate(ranked):
-            bar_w = (fv / max(fimp.values())) * 100 if max(fimp.values()) > 0 else 0
-            rank_html += f"""
-            <div style="display:flex; align-items:center; gap:0.8rem; padding:0.5rem 0; border-bottom:1px solid rgba(255,255,255,0.03);">
-                <div style="color:#4b5563; font-size:0.8rem; width:25px; text-align:right;">#{i+1}</div>
+            pct = (fv / max_val * 100) if max_val > 0 else 0
+            rhtml += f"""
+            <div style="display:flex; align-items:center; gap:0.7rem; padding:0.45rem 0; border-bottom:1px solid rgba(255,255,255,0.03);">
+                <div style="color:#4b5563; font-size:0.75rem; width:22px; text-align:right;">#{i+1}</div>
                 <div style="flex:1;">
-                    <div style="color:#c8d0e0; font-size:0.85rem;">{fn}</div>
-                    <div style="background:rgba(255,255,255,0.03); border-radius:4px; height:6px; margin-top:4px; overflow:hidden;">
-                        <div style="width:{bar_w}%; height:100%; background:linear-gradient(90deg,#7c3aed,#06d6a0); border-radius:4px;"></div>
+                    <div style="color:#c8d0e0; font-size:0.82rem;">{fn}</div>
+                    <div style="background:rgba(255,255,255,0.03); border-radius:3px; height:5px; margin-top:3px; overflow:hidden;">
+                        <div style="width:{pct}%; height:100%; background:linear-gradient(90deg,#7c3aed,#06d6a0); border-radius:3px;"></div>
                     </div>
                 </div>
-                <div class="stat-tag">{fv:.5f}</div>
-            </div>
-            """
-        st.markdown(f'<div class="glass">{rank_html}</div>', unsafe_allow_html=True)
+                <span class="tag">{fv:.5f}</span>
+            </div>"""
+        st.markdown(f'<div class="gl">{rhtml}</div>', unsafe_allow_html=True)
 
-    # ── Feature List ──
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Full Feature Set Used by Model</div>', unsafe_allow_html=True)
-    fcols = st.columns(3)
-    for i, fn in enumerate(feature_names):
-        fcols[i % 3].markdown(f'<span class="stat-tag" style="margin:2px;">{fn}</span>', unsafe_allow_html=True)
+    # feature set tags
+    _sec("📋 Full Feature Set")
+    cols = st.columns(3)
+    for i, fn in enumerate(FEATURES):
+        cols[i % 3].markdown(f'<span class="tag" style="margin:2px;">{fn}</span>', unsafe_allow_html=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 5: 🎛️ WHAT-IF SIMULATOR
-# ────────────────────────────────────────────────────────────────────────────
-with tab5:
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>What-If Sensitivity Simulator</div>', unsafe_allow_html=True)
-
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 5 — WHAT-IF SIMULATOR
+# ═══════════════════════════════════════════════════════════════════════════
+with t5:
+    _sec("🎛️ What-If Sensitivity Simulator")
     st.markdown("""
-    <div class="glass">
-        <p style="color:#9ca3af; margin:0;">Adjust a <strong style="color:#06d6a0;">single feature</strong>
-        while keeping others fixed. Watch how the predicted emotion and confidence change in real-time.
-        This reveals which inputs the model is most sensitive to.</p>
-    </div>
+    <div class="gl"><p style="color:#9ca3af; margin:0;">
+    Adjust a <strong style="color:#06d6a0;">single feature</strong> while keeping others fixed.
+    Watch how predicted probabilities shift — revealing which inputs the model is most sensitive to.
+    </p></div>
     """, unsafe_allow_html=True)
 
-    wc1, wc2 = st.columns([1, 2], gap="large")
+    wl, wr = st.columns([1, 2], gap="large")
+    with wl:
+        st.markdown('<div class="gl">', unsafe_allow_html=True)
+        st.markdown("##### ⚙️ Baseline")
+        w_age  = st.slider("Age", 10, 90, 25, key="w_age")
+        w_gen  = st.selectbox("Gender", GENDERS, key="w_gen")
+        w_plat = st.selectbox("Platform", PLATFORMS, key="w_plat")
+        w_use  = st.number_input("Usage (min)", 1, 1440, 120, key="w_use")
+        w_pos  = st.number_input("Posts", 0, 100, 3, key="w_pos")
+        w_lik  = st.number_input("Likes", 0, 10000, 45, key="w_lik")
+        w_com  = st.number_input("Comments", 0, 5000, 10, key="w_com")
+        w_msg  = st.number_input("Messages", 0, 5000, 15, key="w_msg")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    with wc1:
-        st.markdown('<div class="glass">', unsafe_allow_html=True)
-        st.markdown("##### ⚙️ Fixed Baseline")
-        w_age      = st.slider("Age", 10, 90, 25, key="w_age")
-        w_gender   = st.selectbox("Gender", GENDERS, key="w_gender")
-        w_platform = st.selectbox("Platform", PLATFORMS, key="w_platform")
-        w_usage    = st.number_input("Usage Time", 1, 1440, 120, key="w_usage")
-        w_posts    = st.number_input("Posts/Day", 0, 100, 3, key="w_posts")
-        w_likes    = st.number_input("Likes/Day", 0, 10000, 45, key="w_likes")
-        w_comments = st.number_input("Comments/Day", 0, 5000, 10, key="w_comments")
-        w_messages = st.number_input("Messages/Day", 0, 5000, 15, key="w_messages")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with wc2:
-        sweep_feature = st.selectbox("Feature to Sweep", [
+    with wr:
+        sweep_feat = st.selectbox("Feature to Sweep", [
             "Daily Usage Time", "Posts Per Day", "Likes Received",
-            "Comments Received", "Messages Sent", "Age"
-        ], key="sweep_feat")
+            "Comments Received", "Messages Sent", "Age",
+        ], key="sw_feat")
 
-        sweep_map = {
-            "Daily Usage Time":   ("usage", 1, 500, 25),
-            "Posts Per Day":      ("posts", 0, 50, 3),
-            "Likes Received":     ("likes", 0, 500, 25),
-            "Comments Received":  ("comments", 0, 200, 10),
-            "Messages Sent":      ("messages", 0, 200, 10),
-            "Age":                ("age", 10, 80, 5),
+        sweep_cfg = {
+            "Daily Usage Time":  ("usage", 1,  500, 25),
+            "Posts Per Day":     ("posts", 0,   50, 3),
+            "Likes Received":    ("likes", 0,  500, 25),
+            "Comments Received": ("comments", 0, 200, 10),
+            "Messages Sent":     ("messages", 0, 200, 10),
+            "Age":               ("age",  10,  80, 5),
         }
+        param, lo, hi, step = sweep_cfg[sweep_feat]
+        vals = list(range(lo, hi + 1, step))
 
-        param, lo, hi, step = sweep_map[sweep_feature]
-        sweep_vals = list(range(lo, hi + 1, step))
+        traces = {cn: [] for cn in CLASSES}
+        preds  = []
 
-        # Build predictions for each sweep value
-        sweep_results = {cn: [] for cn in class_names}
-        sweep_preds = []
+        base = dict(age=w_age, gender=w_gen, platform=w_plat,
+                    usage=w_use, posts=w_pos, likes=w_lik,
+                    comments=w_com, messages=w_msg)
 
-        for sv in sweep_vals:
-            args = dict(age=w_age, gender=w_gender, platform=w_platform,
-                        usage=w_usage, posts=w_posts, likes=w_likes,
-                        comments=w_comments, messages=w_messages)
-            args[param] = sv
-            inp_s, _ = build_input(args['age'], args['gender'], args['platform'],
-                                   args['usage'], args['posts'], args['likes'],
-                                   args['comments'], args['messages'])
-            pr = predict_single(inp_s)
-            for i, cn in enumerate(class_names):
-                sweep_results[cn].append(float(pr[i]))
-            sweep_preds.append(class_names[int(np.argmax(pr))])
+        for v in vals:
+            a = base.copy()
+            a[param] = v
+            xs, _ = _build(a["age"], a["gender"], a["platform"],
+                           a["usage"], a["posts"], a["likes"],
+                           a["comments"], a["messages"])
+            pr = _predict(xs)
+            for ci, cn in enumerate(CLASSES):
+                traces[cn].append(float(pr[ci]))
+            preds.append(CLASSES[int(np.argmax(pr))])
 
-        # ── Line Chart ──
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Probability Sweep</div>', unsafe_allow_html=True)
-        sfig = go.Figure()
-        for cn in class_names:
-            ec = EMOTION_CONFIG.get(cn, {}).get('color', '#7c3aed')
-            sfig.add_trace(go.Scatter(
-                x=sweep_vals, y=sweep_results[cn], mode='lines+markers',
-                name=cn, line=dict(color=ec, width=2.5), marker=dict(size=5),
+        # line chart
+        _sec("📈 Probability Sweep")
+        lfig = go.Figure()
+        for cn in CLASSES:
+            lfig.add_trace(go.Scatter(
+                x=vals, y=traces[cn], mode="lines+markers",
+                name=cn, line=dict(color=_emo(cn)["c"], width=2.5),
+                marker=dict(size=5),
             ))
-        sfig.update_layout(**styled_layout(height=400,
-            xaxis=dict(title=sweep_feature, gridcolor='rgba(255,255,255,0.03)', tickfont=dict(color='#4b5563')),
-            yaxis=dict(title='Probability', range=[0, 1], gridcolor='rgba(255,255,255,0.03)', tickfont=dict(color='#4b5563')),
-            legend=dict(font=dict(color='#9ca3af', size=10)),
+        lfig.update_layout(**_layout(h=400,
+            xaxis=dict(title=sweep_feat,
+                       gridcolor="rgba(255,255,255,0.03)",
+                       tickfont=dict(color="#4b5563")),
+            yaxis=dict(title="Probability", range=[0, 1],
+                       gridcolor="rgba(255,255,255,0.03)",
+                       tickfont=dict(color="#4b5563")),
+            legend=dict(font=dict(color="#9ca3af", size=10)),
         ))
-        st.plotly_chart(sfig, use_container_width=True)
+        st.plotly_chart(lfig, use_container_width=True)
 
-        # ── Predicted Emotion Strip ──
-        st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>Predicted Emotion at Each Point</div>', unsafe_allow_html=True)
-        strip_html = '<div style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:1rem;">'
-        for sv, pe in zip(sweep_vals, sweep_preds):
-            ec = EMOTION_CONFIG.get(pe, {}).get('color', '#7c3aed')
-            em = EMOTION_CONFIG.get(pe, {}).get('emoji', '🔮')
-            strip_html += f'<div style="background:rgba(255,255,255,0.04); border:1px solid {ec}30; border-radius:8px; padding:0.3rem 0.6rem; text-align:center; min-width:55px;"><div style="font-size:1.2rem;">{em}</div><div style="font-size:0.65rem; color:#6b7280;">{sv}</div></div>'
-        strip_html += '</div>'
-        st.markdown(strip_html, unsafe_allow_html=True)
+        # emoji strip
+        _sec("🔮 Predicted Emotion at Each Point")
+        strip = '<div style="display:flex; gap:3px; flex-wrap:wrap;">'
+        for sv, pe in zip(vals, preds):
+            ec = _emo(pe)
+            strip += (
+                f'<div style="background:rgba(255,255,255,0.03); border:1px solid {ec["c"]}25;'
+                f'border-radius:8px; padding:0.25rem 0.5rem; text-align:center; min-width:50px;">'
+                f'<div style="font-size:1.1rem;">{ec["emoji"]}</div>'
+                f'<div style="font-size:0.6rem; color:#6b7280;">{sv}</div></div>'
+            )
+        strip += "</div>"
+        st.markdown(strip, unsafe_allow_html=True)
+
+        # sensitivity summary
+        _sec("📐 Sensitivity Summary")
+        changes = {}
+        for cn in CLASSES:
+            arr = traces[cn]
+            changes[cn] = max(arr) - min(arr) if arr else 0
+        sens_sorted = sorted(changes.items(), key=lambda x: x[1], reverse=True)
+        shtml = ""
+        for cn, delta in sens_sorted:
+            ec = _emo(cn)
+            pct = delta * 100
+            shtml += f"""
+            <div class="fr">
+                <span class="fn">{ec['emoji']} {cn}</span>
+                <span class="fv" style="color:{ec['c']};">Δ {pct:.1f}%</span>
+            </div>"""
+        st.markdown(f'<div class="gl">{shtml}</div>', unsafe_allow_html=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# TAB 6: ℹ️ ABOUT
-# ────────────────────────────────────────────────────────────────────────────
-with tab6:
-    st.markdown("""
-    <div class="neon-card" style="text-align:left;">
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 6 — ABOUT
+# ═══════════════════════════════════════════════════════════════════════════
+with t6:
+    st.markdown(f"""
+    <div class="neon" style="text-align:left;">
         <div style="text-align:center; margin-bottom:1rem;">
             <div style="font-family:'Space Grotesk'; font-size:2rem; font-weight:700;
-                 background: linear-gradient(135deg, #7c3aed, #06d6a0);
+                 background:linear-gradient(135deg,#7c3aed,#06d6a0);
                  -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
                 🧠 About NeuroSense
             </div>
         </div>
-        <p style="color:#9ca3af;">NeuroSense is an advanced behavioral emotion analytics platform that predicts a user's
-        dominant emotional state based on their social media engagement patterns. The system leverages
-        a hybrid pipeline combining classical machine learning, gradient boosting ensembles, and deep
-        neural networks to deliver high-accuracy multi-class classification.</p>
+        <p style="color:#9ca3af;">NeuroSense predicts a user's dominant emotional state from social
+        media engagement patterns.  It combines classical ML, gradient boosting ensembles, and deep
+        neural networks in a fully automated training pipeline with production-grade deployment.</p>
     </div>
     """, unsafe_allow_html=True)
 
-    ab1, ab2 = st.columns(2, gap="large")
+    a1, a2 = st.columns(2, gap="large")
 
-    with ab1:
+    with a1:
         st.markdown("""
-        <div class="glass">
-            <div class="sec-h" style="margin-top:0;"><div class="sec-h-glow"></div>⚙️ Data Pipeline</div>
-            <ul style="color:#9ca3af; padding-left:1.2rem; font-size:0.9rem; line-height:1.8;">
-                <li>Multi-stage anomaly-resilient data cleaning (7 anomaly types handled)</li>
-                <li>6 engineered behavioral interaction features</li>
-                <li>One-hot categorical encoding with strict schema alignment</li>
-                <li>Multicollinearity elimination (r &gt; 0.85 threshold)</li>
-                <li>Partition-isolated StandardScaler (fit on train only)</li>
-                <li>Target label typo correction (e.g. "Agression" → "Anger")</li>
+        <div class="gl">
+            <div class="sh" style="margin-top:0;"><div class="sh-bar"></div>⚙️ Data Pipeline</div>
+            <ul style="color:#9ca3af; padding-left:1.1rem; font-size:0.85rem; line-height:1.9;">
+                <li>Multi-stage anomaly-resilient cleaning (7 anomaly types)</li>
+                <li>6 engineered behavioural features</li>
+                <li>One-hot encoding + strict schema alignment</li>
+                <li>Multicollinearity filter (r &gt; 0.85)</li>
+                <li>Train-only StandardScaler (leak-proof)</li>
+                <li>Label typo correction ("Agression" → "Anger")</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("""
-        <div class="glass">
-            <div class="sec-h" style="margin-top:0;"><div class="sec-h-glow"></div>📊 Evaluation Methods</div>
-            <ul style="color:#9ca3af; padding-left:1.2rem; font-size:0.9rem; line-height:1.8;">
-                <li>Weighted & Macro F1-Score, Precision, Recall</li>
-                <li>One-vs-Rest ROC-AUC & PR-AUC Curves</li>
+        <div class="gl">
+            <div class="sh" style="margin-top:0;"><div class="sh-bar"></div>📊 Evaluation</div>
+            <ul style="color:#9ca3af; padding-left:1.1rem; font-size:0.85rem; line-height:1.9;">
+                <li>Weighted &amp; Macro F1, Precision, Recall</li>
+                <li>OvR ROC-AUC &amp; PR-AUC Curves</li>
                 <li>Per-class Classification Report</li>
-                <li>SHAP TreeExplainer Feature Importance</li>
-                <li>Learning Curve Analysis (bias/variance diagnosis)</li>
+                <li>SHAP TreeExplainer Importance</li>
+                <li>Learning Curve Diagnostics</li>
                 <li>Normalized Confusion Matrix</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
 
-    with ab2:
+    with a2:
         st.markdown("""
-        <div class="glass">
-            <div class="sec-h" style="margin-top:0;"><div class="sec-h-glow"></div>🤖 Models Trained (8 Total)</div>
-            <ul style="color:#9ca3af; padding-left:1.2rem; font-size:0.9rem; line-height:1.8;">
+        <div class="gl">
+            <div class="sh" style="margin-top:0;"><div class="sh-bar"></div>🤖 Models (8 Total)</div>
+            <ul style="color:#9ca3af; padding-left:1.1rem; font-size:0.85rem; line-height:1.9;">
                 <li>📊 Logistic Regression (multinomial, balanced)</li>
                 <li>🌲 Random Forest (300 trees, balanced)</li>
-                <li>🚀 CatBoost (RandomizedSearchCV tuned)</li>
-                <li>⚡ LightGBM (RandomizedSearchCV tuned)</li>
-                <li>🎯 XGBoost (RandomizedSearchCV tuned)</li>
-                <li>🧠 MLP (256→128→64, BatchNorm + Dropout)</li>
-                <li>🔮 Swish-Net (512→256→128→64, Swish activation)</li>
-                <li>🏆 Soft-Vote Ensemble (top-3 averaged)</li>
+                <li>🚀 CatBoost (RandomizedSearchCV, 20 iter)</li>
+                <li>⚡ LightGBM (RandomizedSearchCV, 20 iter)</li>
+                <li>🎯 XGBoost (RandomizedSearchCV, 20 iter)</li>
+                <li>🧠 MLP (256→128→64, BN + Dropout)</li>
+                <li>🔮 Swish-Net (512→256→128→64, Swish)</li>
+                <li>🏆 Soft-Vote Ensemble (top-3 avg)</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
 
         st.markdown("""
-        <div class="glass">
-            <div class="sec-h" style="margin-top:0;"><div class="sec-h-glow"></div>🛠️ Tech Stack</div>
-            <table style="width:100%; color:#9ca3af; font-size:0.9rem;">
-                <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">ML/DL</strong></td>
-                    <td>scikit-learn, CatBoost, LightGBM, XGBoost, TensorFlow/Keras</td></tr>
+        <div class="gl">
+            <div class="sh" style="margin-top:0;"><div class="sh-bar"></div>🛠️ Tech Stack</div>
+            <table style="width:100%; color:#9ca3af; font-size:0.85rem;">
+                <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">ML / DL</strong></td>
+                    <td>scikit-learn · CatBoost · LightGBM · XGBoost · TF/Keras</td></tr>
                 <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">XAI</strong></td>
                     <td>SHAP (TreeExplainer)</td></tr>
                 <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">Frontend</strong></td>
-                    <td>Streamlit, Plotly, Custom CSS</td></tr>
+                    <td>Streamlit · Plotly · Custom CSS</td></tr>
                 <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">Data</strong></td>
-                    <td>Pandas, NumPy, SciPy</td></tr>
-                <tr><td style="padding:0.3rem 0;"><strong style="color:#c8d0e0;">Viz</strong></td>
-                    <td>Matplotlib, Seaborn (training pipeline)</td></tr>
+                    <td>Pandas · NumPy · SciPy</td></tr>
             </table>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Architecture Diagram (Mermaid-style using text) ──
-    st.markdown('<div class="sec-h"><div class="sec-h-glow"></div>🏗️ System Architecture</div>', unsafe_allow_html=True)
+    # architecture flow
+    _sec("🏗️ System Architecture")
     st.markdown("""
-    <div class="glass" style="text-align:center; padding:2rem;">
-        <div style="display:flex; justify-content:center; align-items:center; gap:1rem; flex-wrap:wrap;">
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem;">📁 Raw CSVs</div>
-            <div style="color:#4b5563;">→</div>
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem;">🧹 Cleaning Pipeline</div>
-            <div style="color:#4b5563;">→</div>
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem;">⚙️ Feature Engineering</div>
-            <div style="color:#4b5563;">→</div>
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem;">📐 Scaling</div>
-            <div style="color:#4b5563;">→</div>
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem; background:rgba(6,214,160,0.15); border-color:rgba(6,214,160,0.3); color:#06d6a0;">🏆 Champion Model</div>
-            <div style="color:#4b5563;">→</div>
-            <div class="stat-tag" style="padding:0.5rem 1rem; font-size:0.85rem;">🔮 Prediction</div>
+    <div class="gl" style="text-align:center; padding:1.8rem;">
+        <div style="display:flex; justify-content:center; align-items:center; gap:0.8rem; flex-wrap:wrap;">
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem;">📁 Raw CSVs</span>
+            <span style="color:#4b5563;">→</span>
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem;">🧹 Cleaning</span>
+            <span style="color:#4b5563;">→</span>
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem;">⚙️ Feature Eng</span>
+            <span style="color:#4b5563;">→</span>
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem;">📐 Scaling</span>
+            <span style="color:#4b5563;">→</span>
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem; background:rgba(6,214,160,0.12); border-color:rgba(6,214,160,0.25); color:#06d6a0;">🏆 Champion</span>
+            <span style="color:#4b5563;">→</span>
+            <span class="tag" style="padding:0.4rem 0.9rem; font-size:0.8rem;">🔮 Predict</span>
         </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # deployment info
+    _sec("🚀 Deployment Precautions")
+    st.markdown(f"""
+    <div class="gl">
+        <div class="fr"><span class="fn">Champion Model</span><span class="fv">{champ}</span></div>
+        <div class="fr"><span class="fn">Deployment Type</span><span class="fv">{DEPLOY_TYPE}</span></div>
+        <div class="fr"><span class="fn">Pickle Contract</span><span class="fv">ChampionModelWrapper</span></div>
+        <div class="fr"><span class="fn">TF Strategy</span><span class="fv">Lazy (only if Keras wins)</span></div>
+        <div class="fr"><span class="fn">Python Version</span><span class="fv">3.10 (.python-version)</span></div>
+        <div class="fr"><span class="fn">TF Package</span><span class="fv">tensorflow-cpu (memory-safe)</span></div>
+        <div class="fr" style="border:none;"><span class="fn">Features</span><span class="fv">{len(FEATURES)} retained</span></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1201,8 +1214,8 @@ with tab6:
 # ============================================================================
 
 st.markdown("""
-<div class="app-footer">
-    Built with <span class="footer-glow">NeuroSense</span> Analytics Engine &nbsp;•&nbsp;
-    Powered by ML & Deep Learning &nbsp;•&nbsp; Streamlit + Plotly
+<div class="foot">
+    Built with <b>NeuroSense</b> Analytics Engine &nbsp;•&nbsp;
+    ML &amp; Deep Learning &nbsp;•&nbsp; Streamlit + Plotly
 </div>
 """, unsafe_allow_html=True)
